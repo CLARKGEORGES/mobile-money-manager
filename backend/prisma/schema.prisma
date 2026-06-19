@@ -1,0 +1,276 @@
+// This is your Prisma schema file
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Pour Neon (Vercel Postgres) avec pooling :
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum RoleName {
+  SUPER_ADMIN
+  ADMIN
+  ACCOUNTANT
+  AGENT
+  AUDITOR
+}
+
+enum OperatorCode {
+  ORANGE_MONEY
+  MTN_MOMO
+  MOOV_MONEY
+  WAVE
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  TRANSFER
+  MERCHANT_PAYMENT
+  COLLECTION
+  DISBURSEMENT
+  FEE
+}
+
+enum TransactionStatus {
+  PENDING
+  VALIDATED
+  CANCELLED
+  FAILED
+}
+
+enum NotificationType {
+  TRANSACTION
+  LOW_BALANCE
+  ANOMALY
+  NEW_USER
+  SECURITY
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  VALIDATE
+  CANCEL
+  EXPORT
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  name        RoleName @unique
+  description String?
+  permissions Permission[]
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id       String @id @default(cuid())
+  resource String
+  action   String
+  roles    Role[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  password      String
+  firstName     String
+  lastName      String
+  phone         String?
+  avatarUrl     String?
+  status        UserStatus   @default(ACTIVE)
+  roleId        String
+  role          Role         @relation(fields: [roleId], references: [id])
+  lastLoginAt   DateTime?
+  loginHistory  LoginHistory[]
+  transactions  Transaction[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+  refreshToken  String?
+  deletedAt     DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@map("users")
+}
+
+model LoginHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  ipAddress String?
+  userAgent String?
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@map("login_history")
+}
+
+model MobileMoneyOperator {
+  id          String             @id @default(cuid())
+  code        OperatorCode       @unique
+  name        String
+  logoUrl     String?
+  color       String?
+  isActive    Boolean            @default(true)
+  accounts    MobileMoneyAccount[]
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@map("mobile_money_operators")
+}
+
+model MobileMoneyAccount {
+  id              String              @id @default(cuid())
+  accountNumber   String              @unique
+  accountName     String
+  operatorId      String
+  operator        MobileMoneyOperator @relation(fields: [operatorId], references: [id])
+  initialBalance  Decimal             @db.Decimal(15, 2) @default(0)
+  currentBalance  Decimal             @db.Decimal(15, 2) @default(0)
+  isActive        Boolean             @default(true)
+  description     String?
+  transactions    Transaction[]
+  deletedAt       DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([operatorId])
+  @@index([isActive])
+  @@map("mobile_money_accounts")
+}
+
+model Customer {
+  id           String        @id @default(cuid())
+  name         String
+  phone        String        @unique
+  email        String?
+  address      String?
+  isActive     Boolean       @default(true)
+  transactions Transaction[]
+  deletedAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([phone])
+  @@map("customers")
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  reference       String            @unique
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  amount          Decimal           @db.Decimal(15, 2)
+  fees            Decimal           @db.Decimal(15, 2) @default(0)
+  commission      Decimal           @db.Decimal(15, 2) @default(0)
+  netAmount       Decimal           @db.Decimal(15, 2)
+  accountId       String
+  account         MobileMoneyAccount @relation(fields: [accountId], references: [id])
+  customerId      String?
+  customer        Customer?         @relation(fields: [customerId], references: [id])
+  createdById     String
+  createdBy       User              @relation(fields: [createdById], references: [id])
+  description     String?
+  externalRef     String?
+  transactionDate DateTime          @default(now())
+  validatedAt     DateTime?
+  cancelledAt     DateTime?
+  attachments     Attachment[]
+  auditLogs       AuditLog[]
+  deletedAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([accountId])
+  @@index([customerId])
+  @@index([createdById])
+  @@index([transactionDate])
+  @@index([reference])
+  @@map("transactions")
+}
+
+model Attachment {
+  id            String      @id @default(cuid())
+  transactionId String
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+  fileName      String
+  fileUrl       String
+  fileSize      Int
+  mimeType      String
+  createdAt     DateTime    @default(now())
+
+  @@index([transactionId])
+  @@map("attachments")
+}
+
+model AuditLog {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  action        AuditAction
+  resource      String
+  resourceId    String?
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+  oldValues     Json?
+  newValues     Json?
+  ipAddress     String?
+  userAgent     String?
+  createdAt     DateTime    @default(now())
+
+  @@index([userId])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String             @id @default(cuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id])
+  type      NotificationType
+  status    NotificationStatus @default(UNREAD)
+  title     String
+  message   String
+  data      Json?
+  createdAt DateTime           @default(now())
+
+  @@index([userId])
+  @@index([status])
+  @@map("notifications")
+}
